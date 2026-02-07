@@ -126,9 +126,9 @@ function main() {
     const orgs = Array.from(allOrgs);
     const locations = Array.from(allLocations);
 
-    // Build a short snippet for search (first 300 chars of combined text)
+    // Build searchable text from all pages (keep enough for good search + snippets)
     const combinedText = pages.map(p => p.fullText).filter(Boolean).join(' ');
-    const snippet = combinedText.substring(0, 300).replace(/\s+/g, ' ').trim();
+    const snippet = combinedText.substring(0, 2000).replace(/\s+/g, ' ').trim();
 
     // Add to search index (compact)
     searchIndex.push({

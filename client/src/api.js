@@ -1,7 +1,4 @@
-import Fuse from 'fuse.js';
-
 let searchIndex = null;
-let fuseInstance = null;
 let loadingPromise = null;
 
 const BASE = import.meta.env.BASE_URL || '/';
@@ -13,49 +10,97 @@ async function loadIndex() {
   loadingPromise = (async () => {
     const res = await fetch(`${BASE}data/search-index.json`);
     searchIndex = await res.json();
-
-    fuseInstance = new Fuse(searchIndex, {
-      keys: [
-        { name: 'id', weight: 0.3 },
-        { name: 's', weight: 0.4 },   // snippet
-        { name: 'p', weight: 0.5 },   // people
-        { name: 'o', weight: 0.3 },   // organizations
-        { name: 'l', weight: 0.3 },   // locations
-        { name: 't', weight: 0.2 },   // document type
-        { name: 'n', weight: 0.2 },   // document number
-      ],
-      threshold: 0.3,
-      ignoreLocation: true,
-      includeScore: true,
-      includeMatches: true,
-      minMatchCharLength: 2,
-      useExtendedSearch: true,
-    });
   })();
 
   return loadingPromise;
 }
 
-function formatDoc(item, matches) {
-  // Build a snippet with match highlights
-  let snippet = item.s || '';
-  if (matches) {
-    for (const match of matches) {
-      if (match.key === 's' && match.indices?.length > 0) {
-        let highlighted = '';
-        let lastEnd = 0;
-        const text = match.value || '';
-        for (const [start, end] of match.indices) {
-          highlighted += text.slice(lastEnd, start);
-          highlighted += `<mark>${text.slice(start, end + 1)}</mark>`;
-          lastEnd = end + 1;
-        }
-        highlighted += text.slice(lastEnd);
-        snippet = highlighted;
-        break;
-      }
+/**
+ * Build a snippet around the first match of any search term in the text,
+ * with <mark> highlighting on all matching terms.
+ */
+function buildSnippet(text, terms, contextChars = 120) {
+  if (!text || terms.length === 0) return text?.substring(0, 200) || '';
+
+  const lowerText = text.toLowerCase();
+
+  // Find the earliest match position
+  let earliestPos = -1;
+  for (const term of terms) {
+    const pos = lowerText.indexOf(term.toLowerCase());
+    if (pos !== -1 && (earliestPos === -1 || pos < earliestPos)) {
+      earliestPos = pos;
     }
   }
+
+  if (earliestPos === -1) return text.substring(0, 200);
+
+  // Extract a window around the match
+  const start = Math.max(0, earliestPos - contextChars);
+  const end = Math.min(text.length, earliestPos + contextChars + 50);
+  let snippet = text.substring(start, end).replace(/\s+/g, ' ');
+
+  if (start > 0) snippet = '...' + snippet;
+  if (end < text.length) snippet = snippet + '...';
+
+  // Highlight all matching terms
+  for (const term of terms) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${escaped})`, 'gi');
+    snippet = snippet.replace(regex, '<mark>$1</mark>');
+  }
+
+  return snippet;
+}
+
+/**
+ * Check if a document matches ALL search terms (case-insensitive).
+ * Searches across text, people, orgs, locations, doc type, and doc id.
+ * Returns a score (higher = more matches/relevance) or 0 if no match.
+ */
+function scoreDocument(item, terms) {
+  // Build a combined searchable string for this document
+  const fields = [
+    item.s || '',                              // document text
+    (item.p || []).join(' '),                   // people
+    (item.o || []).join(' '),                   // organizations
+    (item.l || []).join(' '),                   // locations
+    item.t || '',                               // document type
+    item.id || '',                              // doc id
+    item.n || '',                               // document number
+  ];
+  const combined = fields.join(' ').toLowerCase();
+
+  let totalScore = 0;
+  for (const term of terms) {
+    const lowerTerm = term.toLowerCase();
+    const idx = combined.indexOf(lowerTerm);
+    if (idx === -1) return 0; // ALL terms must match
+
+    // Count occurrences for ranking
+    let count = 0;
+    let searchFrom = 0;
+    while (true) {
+      const pos = combined.indexOf(lowerTerm, searchFrom);
+      if (pos === -1) break;
+      count++;
+      searchFrom = pos + 1;
+    }
+
+    // Bonus for matches in people/entities (more relevant)
+    const peopleStr = (item.p || []).join(' ').toLowerCase();
+    if (peopleStr.includes(lowerTerm)) count += 5;
+
+    totalScore += count;
+  }
+
+  return totalScore;
+}
+
+function formatDoc(item, terms) {
+  const snippet = terms.length > 0
+    ? buildSnippet(item.s || '', terms)
+    : (item.s || '').substring(0, 200);
 
   return {
     doc_id: item.id,
@@ -71,22 +116,46 @@ function formatDoc(item, matches) {
   };
 }
 
+/**
+ * Parse query into individual search terms.
+ * Supports "quoted phrases" as single terms.
+ */
+function parseQuery(query) {
+  const terms = [];
+  const regex = /"([^"]+)"|(\S+)/g;
+  let match;
+  while ((match = regex.exec(query)) !== null) {
+    terms.push(match[1] || match[2]);
+  }
+  return terms.filter(t => t.length > 0);
+}
+
 export async function search(query, { limit = 60, offset = 0, type } = {}) {
   await loadIndex();
 
   let results;
 
   if (!query || !query.trim()) {
-    // No query - return all docs (filtered if needed)
     results = searchIndex
       .filter(item => !type || item.t === type)
-      .map(item => formatDoc(item, null));
+      .map(item => formatDoc(item, []));
   } else {
-    // Fuse.js search
-    const fuseResults = fuseInstance.search(query, { limit: 500 });
-    results = fuseResults
-      .filter(r => !type || r.item.t === type)
-      .map(r => formatDoc(r.item, r.matches));
+    const terms = parseQuery(query.trim());
+
+    // Score and filter documents - only exact word/phrase matches
+    const scored = [];
+    for (const item of searchIndex) {
+      if (type && item.t !== type) continue;
+      const score = scoreDocument(item, terms);
+      if (score > 0) {
+        scored.push({ item, score });
+      }
+    }
+
+    // Sort by relevance score (highest first)
+    scored.sort((a, b) => b.score - a.score);
+
+    results = scored.map(({ item }) => formatDoc(item, terms));
   }
 
   const total = results.length;
