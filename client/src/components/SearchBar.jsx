@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { getTypes } from '../api.js';
 
 export default function SearchBar({ query, onQueryChange, filters, onFiltersChange, total, loading }) {
   const [types, setTypes] = useState([]);
   const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
-    fetch('/api/types')
-      .then(r => r.json())
-      .then(setTypes)
-      .catch(() => {});
+    getTypes().then(setTypes).catch(() => {});
   }, []);
 
   return (
@@ -41,7 +39,7 @@ export default function SearchBar({ query, onQueryChange, filters, onFiltersChan
           {total > 0 ? `${total.toLocaleString()} documents found` : query ? 'No results' : ''}
         </span>
         <button className="filter-toggle" onClick={() => setShowFilters(!showFilters)}>
-          Filters {showFilters ? '▲' : '▼'}
+          Filters {showFilters ? '\u25B2' : '\u25BC'}
         </button>
       </div>
 

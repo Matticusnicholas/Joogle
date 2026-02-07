@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/
+client/public/data/
 *.db
 *.db-journal
 *.db-shm

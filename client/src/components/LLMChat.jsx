@@ -1,18 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { search, getDocument } from '../api.js';
 
 export default function LLMChat() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [llmStatus, setLlmStatus] = useState(null);
   const messagesEndRef = useRef(null);
-
-  useEffect(() => {
-    fetch('/api/llm/status')
-      .then(r => r.json())
-      .then(setLlmStatus)
-      .catch(() => setLlmStatus({ available: false, message: 'Cannot connect to server' }));
-  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -27,74 +20,60 @@ export default function LLMChat() {
     setLoading(true);
 
     try {
-      // Try streaming first
-      const res = await fetch('/api/llm/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question }),
-      });
+      // Search for relevant documents
+      const { results: docs, total } = await search(question, { limit: 8 });
 
-      if (res.headers.get('content-type')?.includes('text/event-stream')) {
-        // Handle SSE stream
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let fullResponse = '';
-        let sources = [];
-        let model = '';
-
-        setMessages(prev => [...prev, { role: 'assistant', content: '', streaming: true }]);
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-
-          for (const line of lines) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.token) {
-                fullResponse += data.token;
-                setMessages(prev => {
-                  const updated = [...prev];
-                  updated[updated.length - 1] = {
-                    role: 'assistant',
-                    content: fullResponse,
-                    streaming: true,
-                  };
-                  return updated;
-                });
-              }
-              if (data.done) {
-                sources = data.sources || [];
-                model = data.model || '';
-              }
-            } catch { /* skip */ }
-          }
-        }
-
-        setMessages(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1] = {
-            role: 'assistant',
-            content: fullResponse,
-            sources,
-            model,
-            streaming: false,
-          };
-          return updated;
-        });
-      } else {
-        // Non-streaming fallback
-        const data = await res.json();
+      if (docs.length === 0) {
         setMessages(prev => [...prev, {
           role: 'assistant',
-          content: data.answer,
-          sources: data.sources,
-          model: data.model,
+          content: `No documents found matching "${question}". Try different search terms — names, locations, dates, or document types.`,
+          sources: [],
         }]);
+        setLoading(false);
+        return;
       }
+
+      // Load full text for top 3 results for deeper analysis
+      const detailed = await Promise.all(
+        docs.slice(0, 3).map(d => getDocument(d.doc_id).catch(() => null))
+      );
+
+      // Build a comprehensive answer from the documents
+      let answer = `Found **${total}** documents related to "${question}".\n\n`;
+      answer += `**Top results:**\n\n`;
+
+      for (let i = 0; i < Math.min(docs.length, 5); i++) {
+        const doc = docs[i];
+        const detail = detailed[i];
+        const people = doc.people?.length > 0 ? doc.people.join(', ') : 'N/A';
+
+        answer += `**${i + 1}. ${doc.doc_id}**`;
+        if (doc.document_type) answer += ` (${doc.document_type})`;
+        if (doc.date) answer += ` — ${doc.date}`;
+        answer += `\n`;
+        if (doc.people?.length > 0) answer += `   People: ${people}\n`;
+
+        // Show a relevant excerpt
+        if (detail?.pages?.[0]?.full_text) {
+          const text = detail.pages[0].full_text;
+          // Try to find the most relevant sentence
+          const lowerQ = question.toLowerCase();
+          const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 20);
+          const relevant = sentences.find(s => s.toLowerCase().includes(lowerQ)) || sentences[0] || '';
+          if (relevant) {
+            answer += `   > ${relevant.trim().substring(0, 200)}...\n`;
+          }
+        }
+        answer += `\n`;
+      }
+
+      answer += `\n*Click on any document card in the search results above to read the full text. For AI-powered analysis, run with the Node.js server and Ollama.*`;
+
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: answer,
+        sources: docs.slice(0, 5).map(d => d.doc_id),
+      }]);
     } catch (err) {
       setMessages(prev => [...prev, {
         role: 'assistant',
@@ -109,19 +88,13 @@ export default function LLMChat() {
   return (
     <div className="chat-container">
       <div className="chat-header">
-        <h3>AI Document Assistant</h3>
-        <div className={`llm-status ${llmStatus?.available ? 'online' : 'offline'}`}>
-          {llmStatus?.available ? 'AI Online' : 'Keyword Mode'}
-        </div>
+        <h3>Document Research Assistant</h3>
+        <div className="llm-status offline">Search Mode</div>
       </div>
 
-      {!llmStatus?.available && (
-        <div className="chat-notice">
-          <p>For AI-powered answers, install <a href="https://ollama.ai" target="_blank" rel="noreferrer">Ollama</a> and run:</p>
-          <code>ollama pull mistral</code>
-          <p>Currently using keyword-based document search as fallback.</p>
-        </div>
-      )}
+      <div className="chat-notice">
+        <p>Ask questions to search and summarize relevant documents. For full AI-powered answers, run the local server with <a href="https://ollama.ai" target="_blank" rel="noreferrer">Ollama</a>.</p>
+      </div>
 
       <div className="chat-messages">
         {messages.length === 0 && (
@@ -145,8 +118,17 @@ export default function LLMChat() {
         {messages.map((msg, i) => (
           <div key={i} className={`chat-message ${msg.role}`}>
             <div className="chat-message-content">
-              {msg.content}
-              {msg.streaming && <span className="cursor-blink">▋</span>}
+              {msg.role === 'assistant'
+                ? msg.content.split('\n').map((line, j) => {
+                    // Basic markdown rendering
+                    let rendered = line
+                      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                      .replace(/^> (.+)/, '<blockquote>$1</blockquote>');
+                    return <span key={j} dangerouslySetInnerHTML={{ __html: rendered + '<br/>' }} />;
+                  })
+                : msg.content
+              }
             </div>
             {msg.sources?.length > 0 && (
               <div className="chat-sources">
@@ -156,7 +138,6 @@ export default function LLMChat() {
                 ))}
               </div>
             )}
-            {msg.model && <div className="chat-model">via {msg.model}</div>}
           </div>
         ))}
         <div ref={messagesEndRef} />

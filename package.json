@@ -8,6 +8,7 @@
     "server:dev": "node --watch server/index.js",
     "client:dev": "vite",
     "build": "vite build",
+    "build:static": "node scripts/build-static.js && vite build",
     "start": "NODE_ENV=production node server/index.js",
     "ingest": "node server/ingest.js",
     "setup": "npm install && npm run ingest && npm run build"
@@ -16,7 +17,8 @@
     "better-sqlite3": "^11.7.0",
     "compression": "^1.7.5",
     "cors": "^2.8.5",
-    "express": "^4.21.0"
+    "express": "^4.21.0",
+    "fuse.js": "^7.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.0",

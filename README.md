@@ -4,15 +4,33 @@ A fast, live-search engine for the publicly released Jeffrey Epstein court docum
 
 ## Features
 
-- **Live Search** - Results appear as you type, powered by SQLite FTS5 full-text search
+- **Live Search** - Results appear as you type, powered by Fuse.js fuzzy search (static) or SQLite FTS5 (server)
 - **Expandable Grid** - Documents shown as cards in a responsive grid; click to expand and read full pages
 - **Document Viewer** - Full page-by-page viewer with in-document search, keyboard navigation, and page thumbnails
 - **Entity Extraction** - Browse by people, organizations, locations mentioned in documents
-- **AI Assistant** - Ask questions about the documents using a local LLM via Ollama (optional)
-- **Filters** - Filter by document type, date range
-- **Fast** - SQLite with FTS5 tokenized index for sub-millisecond search across 29,000+ pages
+- **AI Assistant** - Ask questions about the documents (search-based on GitHub Pages, LLM-powered with local server)
+- **Filters** - Filter by document type
+- **GitHub Pages Ready** - Fully static deployment via GitHub Actions
 
-## Quick Start
+## Deploy to GitHub Pages (Free Hosting)
+
+The GitHub Actions workflow is already set up. You just need to enable Pages:
+
+1. Go to your repo **Settings** > **Pages**
+2. Under **Source**, select **GitHub Actions**
+3. Push to `main` branch (or click "Run workflow" in the Actions tab)
+4. The action will automatically clone the data, build everything, and deploy
+
+That's it - the workflow handles:
+- Cloning the 29,000+ document files from epstein-docs
+- Building the search index (4.6 MB, ~1 MB gzipped)
+- Creating 8,192 individual document JSON files
+- Building the React frontend
+- Deploying to GitHub Pages
+
+## Local Development
+
+### Quick Start (Static Mode)
 
 ```bash
 # 1. Clone this repo
@@ -25,7 +43,19 @@ git clone --depth 1 https://github.com/epstein-docs/epstein-docs.github.io.git d
 # 3. Install dependencies
 npm install
 
-# 4. Ingest documents into search database
+# 4. Build static data + frontend
+npm run build:static
+
+# 5. Serve the dist folder (any static server works)
+npx serve dist
+```
+
+### Server Mode (with SQLite + Ollama LLM)
+
+```bash
+# Steps 1-3 same as above, then:
+
+# 4. Ingest documents into SQLite
 npm run ingest
 
 # 5. Build frontend
@@ -37,26 +67,21 @@ npm start
 
 Then open http://localhost:3001
 
-### Development Mode
+### Dev Mode (hot reload)
 
 ```bash
 npm run dev
 ```
 
-This starts both the Express API server and the Vite dev server with hot reload.
-
-## AI Assistant (Optional)
+## AI Assistant (Optional - Server Mode)
 
 For AI-powered document Q&A, install [Ollama](https://ollama.ai):
 
 ```bash
-# Install Ollama, then:
 ollama pull mistral
 ```
 
-The AI assistant will automatically connect when Ollama is running. Without Ollama, it falls back to keyword-based document search.
-
-You can configure the model via environment variables:
+The AI assistant auto-connects when Ollama is running. Configure via environment variables:
 
 ```bash
 OLLAMA_URL=http://localhost:11434
@@ -72,36 +97,39 @@ OLLAMA_MODEL=mistral
 
 ## Tech Stack
 
-- **Backend**: Node.js, Express, better-sqlite3 with FTS5
-- **Frontend**: React 18, Vite
-- **Search**: SQLite Full-Text Search (FTS5) with porter stemming
-- **AI**: Ollama (local LLM inference)
+- **Frontend**: React 18, Vite, Fuse.js (client-side fuzzy search)
+- **Backend** (optional): Node.js, Express, better-sqlite3 with FTS5
+- **AI** (optional): Ollama (local LLM inference)
+- **Hosting**: GitHub Pages via GitHub Actions
 - **Data**: ~29,000 OCR-processed JSON documents from epstein-docs
 
 ## Project Structure
 
 ```
 Joogle/
+├── .github/workflows/
+│   └── deploy.yml       # GitHub Pages CI/CD
+├── scripts/
+│   └── build-static.js  # Generates static JSON data files
 ├── server/
-│   ├── index.js        # Express server
-│   ├── database.js     # SQLite setup, queries, FTS5
-│   ├── search.js       # Search API routes
-│   ├── llm.js          # Ollama LLM integration
-│   └── ingest.js       # Data ingestion script
+│   ├── index.js         # Express server (optional)
+│   ├── database.js      # SQLite setup, queries, FTS5
+│   ├── search.js        # Search API routes
+│   ├── llm.js           # Ollama LLM integration
+│   └── ingest.js        # Data ingestion script
 ├── client/
 │   ├── index.html
 │   └── src/
 │       ├── App.jsx              # Main app with search state
+│       ├── api.js               # Unified API (static JSON / server)
 │       ├── components/
 │       │   ├── SearchBar.jsx    # Live search input + filters
 │       │   ├── ResultsGrid.jsx  # Card grid with document cards
 │       │   ├── DocumentViewer.jsx # Full document overlay viewer
-│       │   ├── LLMChat.jsx      # AI chat interface
+│       │   ├── LLMChat.jsx      # AI chat / document research
 │       │   └── StatsBar.jsx     # Database statistics
 │       └── styles/
 │           └── app.css          # Dark theme styles
-├── data/                # Cloned epstein-docs (gitignored)
-├── joogle.db           # SQLite database (generated, gitignored)
 ├── vite.config.js
 └── package.json
 ```

@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { getStats } from '../api.js';
 
 export default function StatsBar() {
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    fetch('/api/stats')
-      .then(r => r.json())
-      .then(setStats)
-      .catch(() => {});
+    getStats().then(setStats).catch(() => {});
   }, []);
 
   if (!stats) return null;

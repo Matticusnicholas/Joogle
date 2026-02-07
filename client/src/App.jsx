@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import SearchBar from './components/SearchBar.jsx';
 import ResultsGrid from './components/ResultsGrid.jsx';
 import DocumentViewer from './components/DocumentViewer.jsx';
 import LLMChat from './components/LLMChat.jsx';
 import StatsBar from './components/StatsBar.jsx';
+import { search as apiSearch, getDocument } from './api.js';
 
 export default function App() {
   const [query, setQuery] = useState('');
@@ -14,24 +15,16 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [filters, setFilters] = useState({});
   const [offset, setOffset] = useState(0);
-  const abortRef = useRef(null);
+  const [indexReady, setIndexReady] = useState(false);
 
-  const search = useCallback(async (q, newOffset = 0, append = false) => {
-    if (abortRef.current) abortRef.current.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
+  const doSearch = useCallback(async (q, newOffset = 0, append = false) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({
-        q: q || '',
-        limit: '60',
-        offset: String(newOffset),
+      const data = await apiSearch(q, {
+        limit: 60,
+        offset: newOffset,
+        type: filters.type || undefined,
       });
-      if (filters.type) params.set('type', filters.type);
-
-      const res = await fetch(`/api/search?${params}`, { signal: controller.signal });
-      const data = await res.json();
 
       if (append) {
         setResults(prev => [...prev, ...data.results]);
@@ -40,8 +33,9 @@ export default function App() {
       }
       setTotal(data.total);
       setOffset(newOffset);
+      setIndexReady(true);
     } catch (err) {
-      if (err.name !== 'AbortError') console.error('Search error:', err);
+      console.error('Search error:', err);
     } finally {
       setLoading(false);
     }
@@ -49,22 +43,23 @@ export default function App() {
 
   // Live search on query change
   useEffect(() => {
-    const timer = setTimeout(() => search(query, 0), query ? 200 : 0);
+    const timer = setTimeout(() => doSearch(query, 0), query ? 150 : 0);
     return () => clearTimeout(timer);
-  }, [query, search]);
+  }, [query, doSearch]);
 
   const loadMore = () => {
-    const newOffset = offset + 60;
-    search(query, newOffset, true);
+    doSearch(query, offset + 60, true);
   };
 
   const openDocument = async (docId) => {
+    setLoading(true);
     try {
-      const res = await fetch(`/api/documents/${docId}`);
-      const doc = await res.json();
+      const doc = await getDocument(docId);
       setExpandedDoc(doc);
     } catch (err) {
       console.error('Failed to load document:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -91,14 +86,16 @@ export default function App() {
 
         <StatsBar />
 
-        <div className="actions-bar">
-          <button
-            className={`chat-toggle ${showChat ? 'active' : ''}`}
-            onClick={() => setShowChat(!showChat)}
-          >
-            {showChat ? 'Hide AI Assistant' : 'Ask AI About Files'}
-          </button>
-        </div>
+        {indexReady && (
+          <div className="actions-bar">
+            <button
+              className={`chat-toggle ${showChat ? 'active' : ''}`}
+              onClick={() => setShowChat(!showChat)}
+            >
+              {showChat ? 'Hide AI Assistant' : 'Ask AI About Files'}
+            </button>
+          </div>
+        )}
 
         {showChat && <LLMChat />}
 
